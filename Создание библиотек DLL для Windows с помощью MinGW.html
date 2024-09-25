@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ru" class="translated-ltr"><head>
+    <title>Создание библиотек DLL для Windows с помощью MinGW</title>
+    <meta name="author" content="Martin Payne">
+    <meta name="description" content="A tutorial on how to build and use Windows DLLs with the MinGW C &amp; C++ compilers.">
+    <body>
+	<article id="content">
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Введение</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Один из вопросов, который мне часто задают, это как создать Windows </font></font><abbr title="Динамическая библиотека ссылок"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">DLL</font></font></abbr><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> с помощью MinGW. Под MSVC это довольно просто, так как Visual Studio создаст проект barebone со всем необходимым. С MinGW требуется немного ручной работы, но это не так уж и сложно, когда знаешь, как это делается.</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Эта статья покажет вам основы создания DLL с помощью MinGW, а затем связывания их с вашими приложениями. Код, который мы создаем здесь, будет также использоваться в MSVC, поэтому вы или ваши конечные пользователи можете ориентироваться на несколько компиляторов.</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Основы DLL</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">DLL — это тип общей библиотеки, используемой в Microsoft Windows и OS/2, содержащей функции, которые можно повторно использовать в любом приложении, которое хочет их использовать (на самом деле, DLL могут содержать гораздо больше, чем просто функции, но эта статья о создании библиотек функций). Если у вас есть библиотека </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">foo.dll</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> , которая содержит функцию </font></font><code class="language-c">DoWork()</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">, DLL должна </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">экспортировать</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> эту функцию, чтобы ее могли использовать приложения. Аналогично, если приложение </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">bar.exe</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> хочет использовать функцию </font></font><code class="language-c">DoWork()</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">, оно должно </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">импортировать</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> эту функцию из </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">foo.dll</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> (также можно написать код, который загружает DLL после запуска приложения, вызывает функции из этой DLL, а затем выгружает DLL, когда она больше не нужна — так обычно работают системы плагинов и дополнений). Экспорт и импорт функций довольно просты и требуют лишь небольшого кода, сопровождаемого правильной командной строкой компоновщика.</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Негибкий и неэлегантный путь</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Сначала мы создадим DLL, экспортирующую только очень простую функцию, которая складывает два целых числа и возвращает результат. Обратите внимание на </font></font><code class="language-c">__declspec(dllexport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">атрибут « » в коде ниже — это ключ к экспорту функций из DLL, и каждая функция, которую вы хотите экспортировать из DLL, должна быть помечена им (любые внутренние функции, которые не являются частью вашего API, должны быть оставлены как есть). Также обратите внимание на « </font></font><code class="language-c">__cdecl</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» перед именем функции, которое объявляет соглашение о вызове для функции (см. статью Википедии о </font></font><a href="http://en.wikipedia.org/wiki/X86_calling_conventions" title="Википедия: Соглашения о вызовах x86"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">соглашениях о вызовах x86,</font></font></a><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> если вы с ними не знакомы). Соглашение о вызове по умолчанию для функций C в MinGW — </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">cdecl</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> , но хорошей идеей всегда явно указывать соглашение о вызове на случай, если какой-то другой компилятор имеет другое значение по умолчанию — если это произойдет, ваше приложение, скорее всего, будет вести себя неправильно или аварийно завершить работу в результате вызова одной из этих функций. Обратите внимание, что этот первый пример намеренно негибкий и неэлегантный, чтобы точно показать, что происходит за кулисами. В следующем разделе мы скроем эти детали с помощью определений препроцессора.</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">/* add_basic.c<font></font>
+<font></font>
+   Demonstrates creating a DLL with an exported function, the inflexible way.<font></font>
+*/<font></font>
+<font></font>
+__declspec(dllexport) int __cdecl Add(int a, int b)<font></font>
+{<font></font>
+  return (a + b);<font></font>
+}</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Чтобы скомпилировать это, необходимо просто передать опцию « </font></font><kbd>-shared</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» в обычную командную строку компоновщика:</font></font></p>
+        <pre xml:space="preserve"><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -c -o add_basic.o add_basic.c</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -o add_basic.dll -s -shared add_basic.o -Wl,--subsystem,windows</kbd></samp></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Ошибок не должно быть, и теперь у вас должна быть пригодная к использованию DLL. Я разделил этапы компиляции и компоновки в этом примере, хотя для такого небольшого проекта это можно было бы сделать просто с помощью « </font></font><kbd>gcc -o add_basic.dll -s -shared add_basic.c -Wl,--subsystem,windows</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">». « </font></font><kbd>-Wl,--subsystem,windows</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» на самом деле не обязательно, но просто принято, что DLL имеют подсистему Windows GUI, указанную в их заголовке </font></font><abbr title="Портативный исполняемый файл"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">PE</font></font></abbr><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> . Также обратите внимание, что </font></font><kbd>-s</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">переключатель « » используется для удаления символов из DLL — вы, вероятно, захотите сделать это только для релизных сборок.</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Теперь вы можете создать приложение, которое использует эту DLL. Все, что нужно для использования функции </font></font><code class="language-c">Add(a, b)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">, это объявить функцию с </font></font><code class="language-c">__declspec(dllimport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">атрибутом « » перед ее использованием (обратите внимание, что это </font></font><em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">dllimport</font></font></em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> для клиентского приложения, в отличие от </font></font><em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">dllexport,</font></font></em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> используемого в нашей DLL).</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">/* addtest_basic.c<font></font>
+<font></font>
+   Demonstrates using the function imported from the DLL, the inelegant way.<font></font>
+*/<font></font>
+<font></font>
+#include &lt;stdlib.h&gt;<font></font>
+#include &lt;stdio.h&gt;<font></font>
+<font></font>
+/* Declare imported function so that we can actually use it. */<font></font>
+__declspec(dllimport) int __cdecl Add(int a, int b);<font></font>
+<font></font>
+int main(int argc, char** argv)<font></font>
+{<font></font>
+  printf("%d\n", Add(6, 23));<font></font>
+<font></font>
+  return EXIT_SUCCESS;<font></font>
+}</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Теперь вы можете скомпилировать и скомпоновать это приложение, просто указав нашу DLL в командной строке компоновщика.</font></font></p>
+        <pre xml:space="preserve"><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -c -o addtest_basic.o addtest_basic.c</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -o addtest_basic.exe -s addtest_basic.o -L. -ladd_basic</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Users\mpayne\Documents\MinGWDLL&gt; </font></font><kbd>addtest_basic.exe</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+29</font></font></samp></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Параметр « </font></font><kbd>-L</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» указывает дополнительную папку, в которой компоновщик должен искать DLL. В этом случае мы хотим, чтобы компоновщик искал текущий каталог, поэтому мы можем просто использовать точку, но для реальной DLL, которую мы развернули в системе, мы будем использовать полный путь к ее каталогу. </font></font><kbd>-l</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Параметр « » указывает DLL, из которой мы хотим импортировать функции — это должно быть имя файла DLL без расширения файла. Опять же, для такого небольшого проекта приложение можно было бы скомпилировать и связать, выполнив « </font></font><kbd>gcc -o addtest_basic.exe -s addtest_basic.c -L. -ladd_basic</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">».</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Гибкий и элегантный способ</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Вышеприведенный пример очень хорошо демонстрирует, что происходит, но он не идеален — в реальном приложении вы бы не захотели объявлять </font></font><em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">каждую</font></font></em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> импортированную функцию в </font></font><em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">каждом</font></font></em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> файле исходного кода, где она используется. Вместо этого вы бы поместили объявления в заголовочный файл и </font></font><code class="language-c">#include</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">заголовок там, где это необходимо. Единственная проблема в том, что клиентское приложение требует, чтобы функции были объявлены « </font></font><code class="language-c">__declspec(dllimport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">», тогда как при сборке DLL вы должны объявить их « </font></font><code class="language-c">__declspec(dllexport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">». Хотя вы могли бы использовать два отдельных заголовка, это может быть немного головной болью при обслуживании, поэтому вместо этого мы используем некоторые определения препроцессора.</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">/* add.h<font></font>
+<font></font>
+   Declares the functions to be imported by our application, and exported by our<font></font>
+   DLL, in a flexible and elegant way.<font></font>
+*/<font></font>
+<font></font>
+/* You should define ADD_EXPORTS *only* when building the DLL. */<font></font>
+#ifdef ADD_EXPORTS<font></font>
+  #define ADDAPI __declspec(dllexport)<font></font>
+#else<font></font>
+  #define ADDAPI __declspec(dllimport)<font></font>
+#endif<font></font>
+<font></font>
+/* Define calling convention in one place, for convenience. */<font></font>
+#define ADDCALL __cdecl<font></font>
+<font></font>
+/* Make sure functions are exported with C linkage under C++ compilers. */<font></font>
+<font></font>
+#ifdef __cplusplus<font></font>
+extern "C"<font></font>
+{<font></font>
+#endif<font></font>
+<font></font>
+/* Declare our Add function using the above definitions. */<font></font>
+ADDAPI int ADDCALL Add(int a, int b);<font></font>
+<font></font>
+#ifdef __cplusplus<font></font>
+} // __cplusplus defined.<font></font>
+#endif</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Обратите внимание, что мы определили « </font></font><code class="language-c">ADDAPI</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» как « </font></font><code class="language-c">__declspec(dllexport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">», если « </font></font><code class="language-c">ADD_EXPORTS</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» определено, или « </font></font><code class="language-c">__declspec(dllimport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» в противном случае. Это позволяет нам использовать один и тот же заголовок для приложений и DLL. Также обратите внимание, что мы определили « </font></font><code class="language-c">ADDCALL</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» как « </font></font><code class="language-c">__cdecl</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">», что позволяет легко переопределить соглашение о вызовах, которое мы используем для нашего API. Теперь в любом месте нашего кода, где нам нужно экспортировать функцию из нашей DLL, мы указываем « </font></font><code class="language-c">ADDAPI</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» вместо </font></font><code class="language-c">__declspec(dllexport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">атрибута « », и « </font></font><code class="language-c">ADDCALL</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» вместо указания, т. е. « </font></font><code class="language-c">__cdecl</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">». Принято называть эти определения препроцессора « </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">[имя библиотеки]</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> _EXPORTS», « </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">[имя библиотеки]</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> API» и « </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">[имя библиотеки]</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> CALL», поэтому будет хорошей идеей придерживаться этого, чтобы ваш код был читаемым вами и другими.</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Наконец, обратите внимание, что все импортированные/экспортированные функции должны быть заключены в </font></font><code class="language-c">#ifdef __cplusplus</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">блок « », содержащий </font></font><code class="language-c">extern "C"</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">оператор « ». Это позволяет использовать заголовок как приложениям C, так и C++ — без этого компилятор C++ будет использовать искажение имени функции C++, что приведет к сбою этапа компоновки.</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Имейте в виду, что этот код непереносим, ​​поскольку он использует специфические атрибуты Microsoft в коде. Здесь это нормально, поскольку это руководство по созданию Windows DLL, но если вам нужна кроссплатформенная совместимость, то </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">ADDAPI</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> и </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">ADDCALL</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> можно определить условно. Обычно это делается так:</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">#ifdef _WIN32<font></font>
+<font></font>
+  /* You should define ADD_EXPORTS *only* when building the DLL. */<font></font>
+  #ifdef ADD_EXPORTS<font></font>
+    #define ADDAPI __declspec(dllexport)<font></font>
+  #else<font></font>
+    #define ADDAPI __declspec(dllimport)<font></font>
+  #endif<font></font>
+<font></font>
+  /* Define calling convention in one place, for convenience. */<font></font>
+  #define ADDCALL __cdecl<font></font>
+<font></font>
+#else /* _WIN32 not defined. */<font></font>
+<font></font>
+  /* Define with no value on non-Windows OSes. */<font></font>
+  #define ADDAPI<font></font>
+  #define ADDCALL<font></font>
+<font></font>
+#endif</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Код для DLL теперь может включать заголовок, который мы только что создали, и единственное изменение, которое нам нужно сделать, — это включить « </font></font><code class="language-c">ADDCALL</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» перед именем функции (здесь необходимо указать соглашение о вызовах, чтобы предотвратить возможные конфликты между объявлением и определением функции).</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">/* add.c<font></font>
+<font></font>
+   Demonstrates creating a DLL with an exported function in a flexible and<font></font>
+   elegant way.<font></font>
+*/<font></font>
+<font></font>
+#include "add.h"<font></font>
+<font></font>
+int ADDCALL Add(int a, int b)<font></font>
+{<font></font>
+  return (a + b);<font></font>
+}<font></font>
+</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Для компиляции этой DLL необходимо определить « </font></font><code class="language-c">ADD_EXPORTS</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» при компиляции объектного кода, чтобы гарантировать, что « </font></font><code class="language-c">ADDAPI</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» правильно определено в заголовке. Это проще всего сделать, передав « </font></font><kbd>-D ADD_EXPORTS</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» в командной строке:</font></font></p>
+        <pre xml:space="preserve"><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -c -o add.o add.c -D ADD_EXPORTS</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -o add.dll add.o -s -shared -Wl,--subsystem,windows</kbd></samp></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Код клиентского приложения во многом такой же, как и раньше, за исключением того, что теперь мы </font></font><code class="language-c">#include</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">создаем заголовочный файл, а не объявляем функцию в исходном файле.</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">/* addtest.c<font></font>
+<font></font>
+   Demonstrates using the function imported from the DLL, in a flexible and<font></font>
+   elegant way.<font></font>
+*/<font></font>
+<font></font>
+#include &lt;stdlib.h&gt;<font></font>
+#include &lt;stdio.h&gt;<font></font>
+#include &lt;add.h&gt;<font></font>
+<font></font>
+int main(int argc, char** argv)<font></font>
+{<font></font>
+  printf("%d\n", Add(6, 23));<font></font>
+<font></font>
+  return EXIT_SUCCESS;<font></font>
+}</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Для компиляции приложения не требуется никаких изменений в используемой нами командной строке:</font></font></p>
+        <pre xml:space="preserve"><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -c -o addtest.o addtest.c</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -o addtest.exe -s addtest.o -L. -ladd</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Users\mpayne\Documents\MinGWDLL&gt; </font></font><kbd>addtest.exe</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+29</font></font></samp></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Это процесс сборки, который используют многие реальные библиотеки. Если не ясно, что происходит с определениями препроцессора, передайте « </font></font><kbd>-save-temps</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» в командной строке gcc на этапе компиляции и посмотрите на файлы с расширением «.i» — вы заметите, что в конечном итоге сгенерированный код в элегантных и неэлегантных примерах почти идентичен.</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Экспорт и импорт переменных</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">В дополнение к функциям, также возможно экспортировать и импортировать переменные. Эти переменные должны быть объявлены как « </font></font><code class="language-c">extern __declspec(dllexport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» или « </font></font><code class="language-c">extern __declspec(dllimport)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">», в зависимости от того, создаем ли мы DLL или клиентское приложение с использованием этих переменных. Аналогично функциям, мы можем использовать определения нашего препроцессора и просто delcare переменные « </font></font><code class="language-c">extern ADDAPI</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">». Соглашение о вызовах не должно быть указано для переменных.</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Здесь мы добавили две экспортированные переменные в наш заголовочный файл: </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">foo</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> и </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">bar</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> .</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">/* add_var.h<font></font>
+<font></font>
+   Declares a function and variables to be imported by our application, and<font></font>
+   exported by our DLL.<font></font>
+*/<font></font>
+<font></font>
+/* You should define ADD_EXPORTS *only* when building the DLL. */<font></font>
+#ifdef ADD_EXPORTS<font></font>
+  #define ADDAPI __declspec(dllexport)<font></font>
+#else<font></font>
+  #define ADDAPI __declspec(dllimport)<font></font>
+#endif<font></font>
+<font></font>
+/* Define calling convention in one place, for convenience. */<font></font>
+#define ADDCALL __cdecl<font></font>
+<font></font>
+/* Make sure functions are exported with C linkage under C++ compilers. */<font></font>
+#ifdef __cplusplus<font></font>
+extern "C"<font></font>
+{<font></font>
+#endif<font></font>
+<font></font>
+/* Declare our Add function using the above definitions. */<font></font>
+ADDAPI int ADDCALL Add(int a, int b);<font></font>
+<font></font>
+/* Exported variables. */<font></font>
+extern ADDAPI int foo;<font></font>
+extern ADDAPI int bar;<font></font>
+<font></font>
+#ifdef __cplusplus<font></font>
+} // __cplusplus defined.<font></font>
+#endif</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Код DLL теперь включает назначение значений нашим экспортированным переменным:</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">/* add_var.c<font></font>
+<font></font>
+   Demonstrates creating a DLL with an exported function and imported variables.<font></font>
+*/<font></font>
+<font></font>
+#include "add_var.h"<font></font>
+<font></font>
+int ADDCALL Add(int a, int b)<font></font>
+{<font></font>
+  return (a + b);<font></font>
+}<font></font>
+<font></font>
+/* Assign value to exported variables. */<font></font>
+int foo = 7;<font></font>
+int bar = 41;</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Приложение было изменено таким образом, что теперь оно складывает импортированные переменные </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">foo</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> и </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">bar</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> , выводя результат:</font></font></p>
+        <pre xml:space="preserve"><code class="language-c">/* add_vartest.c<font></font>
+<font></font>
+   Demonstrates using the function and variables exported by our DLL.<font></font>
+*/<font></font>
+<font></font>
+#include &lt;stdlib.h&gt;<font></font>
+#include &lt;stdio.h&gt;<font></font>
+<font></font>
+/* Don't forget to change this to #include &lt;add.h&gt; for real applications where<font></font>
+   the header has been deployed to a standard include folder!<font></font>
+*/<font></font>
+#include "add_var.h"<font></font>
+<font></font>
+int main(int argc, char** argv)<font></font>
+{<font></font>
+  /* foo + bar = Add(foo, bar) */<font></font>
+  printf("%d + %d = %d\n", foo, bar, Add(foo, bar));<font></font>
+<font></font>
+  return EXIT_SUCCESS;<font></font>
+}</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Компиляция та же, что и раньше:</font></font></p>
+        <pre xml:space="preserve"><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -c -o add_var.o add_var.c -D ADD_EXPORTS</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -o add_var.dll add_var.o -s -shared -Wl,--subsystem,windows</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -c -o add_vartest.o add_vartest.c</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -o add_vartest.exe -s add_vartest.o -L. -ladd_var</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt; </font></font><kbd>add_vartest.exe</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+7 + 41 = 48</font></font></samp></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Если изменить значения </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">foo</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> и </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">bar</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> , перекомпилировать DLL и снова запустить приложение, можно увидеть, что переменные действительно импортированы из DLL.</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Импорт библиотек</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Хотя обычно можно связать DLL, просто имея DLL в своей системе и добавив некоторые параметры командной строки компоновщика, это не всегда желательно. В этом случае вместо этого следует использовать библиотеку импорта. Библиотека импорта не содержит кода, но содержит всю необходимую информацию, необходимую вашему приложению для поиска функций, экспортируемых DLL. При создании библиотек для использования третьими лицами я бы рекомендовал </font></font><em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">всегда</font></font></em><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> создавать библиотеку импорта и распространять ее с вашими DLL и заголовочными файлами, поскольку у ваших пользователей может возникнуть необходимость в сборке своих приложений с использованием библиотек импорта.</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Если вы изменили имена функций, которые экспортирует DLL (см. «Предупреждение об экспорте функций stdcall» ниже), </font></font><strong><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">единственным</font></font></strong><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> вариантом является библиотека импорта. Это касается API Windows, где вы должны связывать свои приложения с помощью библиотек импорта, т. е. передавая « </font></font><kbd>-lgdi32 -luser32</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» и т. д. в командной строке компоновщика при компиляции программ Windows GUI.</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Создание и использование библиотеки импорта</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Если вы не изменили ни одно из имен функций, экспортируемых DLL, то создание библиотеки импорта сводится к передаче дополнительного параметра « </font><font style="vertical-align: inherit;">» в командную строку компоновщика.</font></font><kbd>-Wl,--out-implib,lib<i>[library name]</i>.a</kbd><font style="vertical-align: inherit;"></font></p>
+        <pre xml:space="preserve"><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -c -o add.o add.c -D ADD_EXPORTS</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Users\mpayne\Documents\MinGWDLL&gt; </font></font><kbd>gcc -o add.dll add.o -s -shared -Wl,--subsystem,windows,--out-implib,libadd.a</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+Создание файла библиотеки: libadd.a</font></font></samp></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Принято использовать имя библиотеки в имени импортируемой библиотеки. Имя файла </font></font><strong><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">обязательно</font></font></strong><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> должно начинаться с «lib» и заканчиваться расширением «.a», чтобы его можно было использовать (на самом деле есть несколько поддерживаемых соглашений об именовании, которые вы можете использовать, и они описаны в руководстве, но все остальное работать не будет).</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Сборка приложения такая же, как и раньше, но вместо передачи каталога, содержащего DLL, компоновщику вы передаете каталог, содержащий библиотеку импорта (на самом деле мы все еще делаем все из текущего каталога, но это, вероятно, не относится к реальному приложению). Чтобы подключиться к DLL, вы передаете имя библиотеки импорта без префикса </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">lib</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> и расширения файла.</font></font></p>
+        <pre xml:space="preserve"><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -c -o addtest.o addtest.c</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -o addtest.exe -s addtest.o -L. -ladd</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Users\mpayne\Documents\MinGWDLL&gt; </font></font><kbd>addtest.exe</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+29</font></font></samp></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Обычно библиотеки DLL располагаются в папке с именем « </font></font><code>bin</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">», а библиотеки импорта располагаются в папке с именем « </font></font><code>lib</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">», например « </font></font><code>C:\Program Files\Add\bin\</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» и « </font></font><code>C:\Program Files\Add\lib\</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">».</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Предупреждение об экспорте функций stdcall</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Одна вещь, которую вы должны знать при объявлении функций « </font></font><code class="language-c">__stdcall</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">», заключается в том, что MinGW и MSVC экспортируют свои функции с немного разными именами (декорации функций). Для нашего примера добавления выше MSVC экспортирует функцию « </font></font><code class="language-c">Add(int a, int b)</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» с именем «</font></font><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">_Добавить@8</font></font></samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">” (подчеркивание, имя функции, знак at, размер аргументов в байтах), тогда как MinGW экспортирует его как “</font></font><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Добавить@8</font></font></samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">” (то же самое, что и MSVC, но без подчеркивания). Поэтому, если вы хотите обеспечить бинарную совместимость между сборками MinGW и MSVC вашей DLL, необходимо изменить имена экспортируемых функций. Это немного сложнее, чем я собираюсь осветить в этой статье, но я написал </font></font><a href="https://www.transmissionzero.co.uk/computing/advanced-mingw-dll-topics/" title="Transmission Zero: Расширенные темы MinGW DLL"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">статью Advanced MinGW DLL Topics,</font></font></a><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> в которой объясняется, как это сделать, а также некоторые подводные камни, на которые следует обратить внимание.</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Добавление информации о версии и комментариев к вашей DLL</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Если вы просмотрите свойства DLL с помощью проводника Windows и перейдете на вкладку «подробности», вы, скорее всего, увидите информацию о DLL, такую ​​как версия, автор, авторские права и описание библиотеки. Это приятный штрих для добавления в DLL (особенно полезный, когда вы хотите узнать, какая версия DLL установлена ​​на вашем ПК), и довольно просто добавить в вашу DLL. Все, что вам нужно сделать, это создать ресурс версии, например, следующий:</font></font></p>
+        <pre xml:space="preserve"><code class="language-win32resource">#include &lt;windows.h&gt;<font></font>
+<font></font>
+// DLL version information.<font></font>
+VS_VERSION_INFO    VERSIONINFO<font></font>
+FILEVERSION        1,0,0,0<font></font>
+PRODUCTVERSION     1,0,0,0<font></font>
+FILEFLAGSMASK      VS_FFI_FILEFLAGSMASK<font></font>
+#ifdef _DEBUG<font></font>
+  FILEFLAGS        VS_FF_DEBUG | VS_FF_PRERELEASE<font></font>
+#else<font></font>
+  FILEFLAGS        0<font></font>
+#endif<font></font>
+FILEOS             VOS_NT_WINDOWS32<font></font>
+FILETYPE           VFT_DLL<font></font>
+FILESUBTYPE        VFT2_UNKNOWN<font></font>
+BEGIN<font></font>
+  BLOCK "StringFileInfo"<font></font>
+  BEGIN<font></font>
+    BLOCK "080904b0"<font></font>
+    BEGIN<font></font>
+      VALUE "CompanyName", "Transmission Zero"<font></font>
+      VALUE "FileDescription", "A library to perform addition."<font></font>
+      VALUE "FileVersion", "1.0.0.0"<font></font>
+      VALUE "InternalName", "AddLib"<font></font>
+      VALUE "LegalCopyright", "©2013 Transmission Zero"<font></font>
+      VALUE "OriginalFilename", "AddLib.dll"<font></font>
+      VALUE "ProductName", "Addition Library"<font></font>
+      VALUE "ProductVersion", "1.0.0.0"<font></font>
+    END<font></font>
+  END<font></font>
+  BLOCK "VarFileInfo"<font></font>
+  BEGIN<font></font>
+    VALUE "Translation", 0x809, 1200<font></font>
+  END<font></font>
+END</code></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Я не буду вдаваться в подробности о том, что означает каждый из этих терминов, так как они очень хорошо описаны в </font></font><a href="http://msdn.microsoft.com/en-us/library/aa381058.aspx" title="MSDN: Ресурс VERSIONINFO"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">MSDN</font></font></a><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> , но большая часть из них говорит сама за себя (я бы в любом случае рекомендовал прочитать статью в MSDN, особенно если языком является американский английский или какой-либо другой, кроме британского английского).</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Идея состоит в том, чтобы скомпилировать скрипт ресурса с помощью </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">windres.exe</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> , а затем передать его компоновщику при компоновке вашей DLL. Например, если ваш скрипт ресурса называется « </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">resource.rc</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> »:</font></font></p>
+        <pre xml:space="preserve"><samp><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>windres -i resource.rc -o resource.o</kbd><font></font>
+<font></font><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">
+z:\Пользователи\mpayne\Документы\MinGWDLL&gt;</font></font><kbd>gcc -o add.dll add.o resource.o -s -shared -Wl,--subsystem,windows,--out-implib,libadd.a</kbd></samp></pre>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Вот и все, что нужно для добавления информации о версии в DLL. Стоит потратить время, чтобы сделать это для всех выпускаемых вами DLL, так как это и полезно, и придает вашему приложению профессиональный вид и ощущение.</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Собираем все вместе</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Используя информацию из этой статьи, вы теперь должны быть в состоянии собрать все это вместе и создать DLL с помощью MinGW, а также исполняемые файлы, которые используют функции, экспортированные из DLL. Чтобы помочь вам, я создал небольшой проект, который создает DLL со следующим функционалом:</font></font></p>
+        <ul>
+          <li><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Экспортированная </font></font><code class="language-c">int Add(int a, int b);</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">функция « », использующая соглашение о вызовах cdecl.</font></font></li>
+          <li><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Экспортированные переменные « </font></font><code class="language-c">foo</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">» и « </font></font><code class="language-c">bar</code><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">».</font></font></li>
+          <li><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Ресурс информации о версии встроен в DLL.</font></font></li>
+        </ul>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Дополнительно будет построен исполняемый файл, который выводит результат сложения, используя экспортированную функцию и экспортированные переменные. Проект может быть собран с помощью утилиты </font></font><i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">mingw32-make</font></font></i><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> .</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Вы можете </font></font><a href="https://github.com/TransmissionZero/MinGW-DLL-Example" title="GitHub: пример MinGW DLL"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">загрузить пример MinGW DLL из GitHub</font></font></a><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> , чтобы построить пример DLL и приложение из этой статьи. Вы можете либо </font></font><kbd>git clone</kbd><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">репозиторий, либо </font></font><a href="https://github.com/TransmissionZero/MinGW-DLL-Example/releases" title="GitHub: примеры релизов MinGW DLL"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">загрузить выпуск примера MinGW DLL</font></font></a><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> . Вы можете использовать его в любых целях, которые посчитаете нужными (см. «License.txt» для полных условий использования). Используя файлы проекта, вы можете легко построить пример из этой статьи и использовать его в качестве основы для своих собственных DLL и приложений.</font></font></p>
+      </section>
+      <section>
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Что нужно знать</font></font></h3>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Есть несколько вещей, которые следует знать при раскрытии API C из DLL. Во-первых, ваш код не может выдавать исключения C++ внутри DLL и ожидать, что клиентское приложение перехватит эти исключения. Это не должно быть проблемой, если вы используете чистый код C, поскольку C не поддерживает исключения C++, но если вы пишете код на C++ и указываете компоновку C для своих экспортируемых функций, вам нужно быть осторожным. Лучше всего перехватывать все исключения, где есть вероятность выдачи исключения, и возвращать какой-либо код ошибки вызывающей стороне API, которую вы раскрываете. Если вы создаете исключения за пределами DLL, вам может повезти, и это сработает, но, скорее всего, это не сработает, если кто-то использует вашу библиотеку с другим языком программирования, другим компилятором или даже другой версией компилятора, который используете вы (то, что вы написали библиотеку на языке C, не означает, что кто-то не будет ее использовать, например, в приложении, написанном на Visual Basic, ассемблере, D или C#).</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Еще одна вещь, о которой следует знать, заключается в том, что если вы передаете структуры в функцию, экспортируемую DLL, или возвращаете структуру из этой функции, вы не сможете позже изменить определение этой структуры. Внесение таких изменений, скорее всего, приведет к сбою старых приложений или их непреднамеренному поведению, поскольку структура памяти структуры изменилась с момента компиляции приложения. Не невозможно изменить определение структуры, не нарушив обратную совместимость, но это также не элегантно. Например, в API Windows часто встречается, что структуры имеют (на первый взгляд бессмысленный) член, который указывает размер структуры, имеют новые члены, добавляемые в конец определения структуры, и передаются в функции по адресу, а не по значению (например, </font></font><a href="http://msdn.microsoft.com/en-us/library/ms646839.aspx" title="MSDN: Структура OPENFILENAME"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">структура OPENFILENAME</font></font></a><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> ). Это те вещи, которые позволяют API Windows изменяться между версиями Windows, не нарушая обратную совместимость (я знаю, что люди могут сказать, что каждая версия Windows вызывает множество проблем с обратной совместимостью, но факт в том, что хорошо написанное приложение, созданное для Windows 95, имеет хорошие шансы работать на последних версиях Windows, что, по моему мнению, весьма впечатляет).</font></font></p>
+        <p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Хотя возможно экспортировать переменные C++ и функции C++ из DLL, вам следует избегать этого, если вы действительно не понимаете, что делаете. C++ не имеет четко определенного </font></font><abbr title="Двоичный интерфейс приложения"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">ABI</font></font></abbr><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> , как C, и вы, вероятно, обнаружите, что скомпилированные функции C++, созданные с помощью компилятора от одного поставщика, несовместимы с функциями от другого поставщика. Фактически, вы можете обнаружить, что совместимость нарушена между различными версиями компилятора C++ от одного поставщика. По этой причине каждый компилятор имеет свой собственный способ искажения имен функций C++, что предотвращает связывание функций, созданных с помощью разных компиляторов C++. Как бы это ни разочаровывало, это предотвращает потенциальный хаос, который может возникнуть в результате различий в ABI. Я рассматриваю C++ DLL в своей </font></font><a href="https://www.transmissionzero.co.uk/computing/advanced-mingw-dll-topics/" title="Transmission Zero: Расширенные темы MinGW DLL"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">статье Advanced MinGW DLL Topics</font></font></a><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> .</font></font></p>
+      </section>
+      <aside class="related">
+        <h3><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Связанные страницы</font></font></h3>
+        <ul class="related">
+          <li><a href="https://www.transmissionzero.co.uk/computing/advanced-mingw-dll-topics/"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Расширенные темы по MinGW DLL</font></font></a><br><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> Расширенные темы по созданию DLL с помощью MinGW, включая классы JNI, P/Invoke и C++.</font></font></li>
+          <li><a href="https://www.transmissionzero.co.uk/computing/win32-apps-with-mingw/"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Создание приложений Win32 с графическим интерфейсом пользователя с помощью MinGW</font></font></a><br><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> Как создать полнофункциональное приложение Windows с графическим интерфейсом пользователя с помощью компилятора MinGW.</font></font></li>
+          <li><a href="https://www.transmissionzero.co.uk/computing/using-glut-with-mingw/"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Использование freeglut или GLUT с MinGW</font></font></a><br><font style="vertical-align: inherit;"><font style="vertical-align: inherit;"> Как создавать приложения OpenGL для Windows с использованием библиотек freeglut или GLUT для Win32 и компилятора MinGW.</font></font></li>
+          <li><a href="https://www.transmissionzero.co.uk/computing/"><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">Все остальные статьи по вычислительной технике на этом сайте</font></font></a></li>
+        </ul>
+      </aside>
+      <aside class="social">
+        <ul>
+          <li><iframe src="./Building Windows DLLs with MinGW__files/like.html" width="100" height="21" scrolling="no" frameborder="0"></li>
+          <li><iframe src="./Building Windows DLLs with MinGW__files/tweet_button.html" width="100" height="21" scrolling="no" frameborder="0" /></li>
+          <li><a href="https://www.transmissionzero.co.uk/newsfeed.atom" type="application/atom+xml" title="Transmission Zero’s News Feed"><img src="./Building Windows DLLs with MinGW__files/feed.png" alt="[Syndication]" /></a></li>
+        </ul>
+      </aside>
+    </article>
+  </body>
+</html></iframe></li></ul></aside></article></body></html>
